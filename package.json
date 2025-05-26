@@ -1,8 +1,10 @@
 {
   "name": "backendjuego",
   "version": "1.0.0",
-  "main": "Backend.js",
+  "description": "Backend para Grassland Forest",
+  "main": "index.js",
   "scripts": {
+    "start": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -23,6 +25,6 @@
     "mongoose": "^8.15.0",
     "morgan": "^1.10.0",
     "redis": "^4.7.0"
-  },
-  "description": ""
+  }
 }
+
