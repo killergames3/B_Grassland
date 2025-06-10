@@ -4,233 +4,393 @@ const cors          = require('cors');
 const helmet        = require('helmet');
 const rateLimit     = require('express-rate-limit');
 const mongoose      = require('mongoose');
+const cookieParser  = require('cookie-parser');
 const { body, param, validationResult } = require('express-validator');
 const jwt           = require('jsonwebtoken');
 
 const app   = express();
 const port  = process.env.PORT || 3000;
 
-// --- 1) Conexión MongoDB ---
-mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => console.log('✔️ Conexión a MongoDB exitosa'))
-.catch(err => console.error('❌ Error al conectar a MongoDB:', err));
+// 1) Conexión a MongoDB
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log('✔️ Conexión a MongoDB exitosa'))
+  .catch(err => { console.error('❌ Error al conectar a MongoDB:', err); process.exit(1); });
 
-// --- 2) Middlewares globales ---
+// 2) Middlewares
 app.use(helmet());
 app.use(express.json());
+app.use(cookieParser());
 
-// CORS solo para tu origen de cliente
-
+// ⚠️ CORS bien configurado
 const allowedOrigins = [
+  'http://localhost:5501',
   'http://localhost:3000',
   'http://127.0.0.1:5501',
-  'http://localhost:5501',
+  'http://127.0.0.1:3000',
+  'http://192.168.100.221:5501',
+  'http://192.168.100.221:3000',
   'https://grasslandforest.xyz',
   'https://effortless-profiterole-45a4cb.netlify.app'
 ];
-
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true); // Permitir
-    } else {
-      // No permitir, pero sin error
-      callback(null, false); 
-    }
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.includes(origin)) cb(null, true);
+    else cb(new Error('CORS no permitido'), false);
   },
-  optionsSuccessStatus: 200
+  credentials: true
 }));
 
-
-// Logger simple
 app.use((req, res, next) => {
   console.log(`→ ${req.method} ${req.originalUrl}`);
   next();
 });
 
-// --- 3) Rate limiter ---
 const apiLimiter = rateLimit({
-  windowMs: (parseInt(process.env.RATE_LIMIT_WINDOW) || 60) * 60 * 1000, // e.g. 60 minutos
+  windowMs: (parseInt(process.env.RATE_LIMIT_WINDOW) || 1) * 3600000,
   max: parseInt(process.env.RATE_LIMIT_MAX) || 100,
-  message: { error: 'Demasiadas peticiones, inténtalo más tarde.' }
+  message: { error: 'Demasiadas peticiones' }
 });
 
-// --- 4) Esquemas y modelos ---
+// ─────────── SCHEMAS ───────────
 const playerSchema = new mongoose.Schema({
-  playerName:       { type: String, required: true, unique: true },
-  posicionplayerx:  { type: Number, default: 2092 },
-  posicionplayery:  { type: Number, default: 2126 },
-  vidaPorcentaje:   { type: Number, default: 100 },
-  aguaPorcentaje:   { type: Number, default: 100 },
+  playerName: { type: String, required: true, unique: true },
+  posicionplayerx: { type: Number, default: 2092 },
+  posicionplayery: { type: Number, default: 2126 },
+  vidaPorcentaje: { type: Number, default: 100 },
+  aguaPorcentaje: { type: Number, default: 100 },
   comidaPorcentaje: { type: Number, default: 100 },
-  speed:            { type: Number, default: 2.7 },
-  mundo:            { type: Number, default: 1 },
-  moneda:           { type: Number, default: 0 },
-  Username:         { type: String, default: '---' },
-  nivel:            { type: Number, default: 0.0 },
-  nivel_exp:        { type: Number, default: 0.0 },
-  sabiduria:        { type: Number, default: 0.0 },
-  sabiduria_exp:    { type: Number, default: 0.0 },
-  fuerza:           { type: Number, default: 0.0 },
-  fuerza_exp:       { type: Number, default: 0.0 },
-  agricultura:      { type: Number, default: 0.0 },
-  agricultura_exp:  { type: Number, default: 0.0 },
-  misiones:         { type: Number, default: 0 },
-  inventory:        { type: Array,  default: [] },
-  chest:            { type: Array,  default: [] }
+  speed: { type: Number, default: 2.7 },
+  mundo: { type: Number, default: 1 },
+  moneda: { type: Number, default: 0 },
+  Username: { type: String, default: '---' },
+  nivel: { type: Number, default: 0 },
+  nivel_exp: { type: Number, default: 0 },
+  sabiduria: { type: Number, default: 0 },
+  sabiduria_exp: { type: Number, default: 0 },
+  fuerza: { type: Number, default: 0 },
+  fuerza_exp: { type: Number, default: 0 },
+  agricultura: { type: Number, default: 0 },
+  agricultura_exp: { type: Number, default: 0 },
+  misiones: { type: Number, default: 0 },
+  inventory: { type: Array, default: [] },
+  chest: { type: Array, default: [] }
 });
 const Player = mongoose.model('Player', playerSchema);
 
 const adminSchema = new mongoose.Schema({
-  _id:       { type: String, default: 'config' },
-  hora:      { type: String, default: '00:00' },
+  _id: { type: String, default: 'config' },
+  hora: { type: String, default: '00:00' },
   dia_noche: { type: String, default: 'dia' }
 });
 const Admin = mongoose.model('Admin', adminSchema);
 
-// --- 5) Middleware de autenticación JWT ---
+const listingSchema = new mongoose.Schema({
+  owner: { type: String, required: true },
+  inventoryId: { type: String, required: true },
+  name: { type: String, required: true },
+  type: { type: String, required: true },
+  qty: { type: Number, required: true, min: 1 },
+  price: { type: Number, required: true, min: 0 },
+  imageUrl: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now }
+});
+const Listing = mongoose.model('Listing', listingSchema);
+
+const commissionRates = { seeds: 0.01, tools: 0.02, containers: 0.015, default: 0.02 };
+
+// ─────────── AUTENTICACIÓN ───────────
 function authenticateJWT(req, res, next) {
-  const auth = req.header('Authorization') || '';
-  const token = auth.startsWith('Bearer ') && auth.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Token no proporcionado' });
+  let token = req.cookies.token;
+  if (!token) {
+    const auth = req.header('Authorization') || '';
+    if (auth.startsWith('Bearer ')) token = auth.split(' ')[1];
+  }
+  if (!token) return res.status(401).json({ error: 'No autenticado' });
 
   jwt.verify(token, process.env.JWT_SECRET, (err, payload) => {
-    if (err) return res.status(403).json({ error: 'Token inválido o expirado' });
-    // Opcional: validar que payload.playerName === req.params.playerName
+    if (err) return res.status(403).json({ error: 'Token inválido' });
     req.user = payload;
     next();
   });
 }
 
-// --- 6) Ruta de emisión de token (login simulado) ---
-app.post('/auth',
-  body('playerName').isString().notEmpty(),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+// ─────────── RUTAS ───────────
 
-    const { playerName } = req.body;
-    // Aquí podrías chequear en BD o firmar directamente:
-    const token = jwt.sign({ playerName }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRES_IN || '1h'
-    });
-    res.json({ token });
+// 🔐 Ruta /auth (crea cookie HttpOnly y también devuelve el token opcionalmente)
+app.post('/auth', body('playerName').isString().notEmpty(), async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+  const { playerName } = req.body;
+  const token = jwt.sign({ playerName }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '1h' });
+
+  // ✅ Cookie HttpOnly
+  res.cookie('token', token, {
+    httpOnly: true,
+    sameSite: 'None', // ← mejor para dev, usa 'None' solo con HTTPS
+    secure: true,   // ← en producción: true (HTTPS)
+    path: '/',
+    maxAge: 3600000
+  });
+
+  res.json({ success: true, token }); // ← por compatibilidad también lo retorna
+});
+
+// 💾 Guardar progreso
+app.post('/save/:playerName', apiLimiter, authenticateJWT,
+  param('playerName').isString().notEmpty(),
+  body('inventory').isArray(),
+  body('chest').isArray(),
+  async (req, res) => {
+    const { playerName } = req.params;
+    if (req.user.playerName !== playerName)
+      return res.status(403).json({ error: 'No autorizado' });
+
+    const update = req.body;
+    try {
+      let p = await Player.findOne({ playerName });
+      if (p) { Object.assign(p, update); await p.save(); }
+      else { p = new Player({ playerName, ...update }); await p.save(); }
+      res.json({ success: true });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: e.message });
+    }
   }
 );
 
-// --- 7) Rutas protegidas: save y load ---
+// 📦 Cargar datos
+app.get('/load/:playerName', apiLimiter, authenticateJWT,
+  param('playerName').isString().notEmpty(),
+  async (req, res) => {
+    const { playerName } = req.params;
+    if (req.user.playerName !== playerName)
+      return res.status(403).json({ error: 'No autorizado' });
+
+    try {
+      let p = await Player.findOne({ playerName });
+      if (!p) { p = new Player({ playerName }); await p.save(); }
+
+      let a = await Admin.findById('config');
+      if (!a) { a = new Admin(); await a.save(); }
+
+      res.json({ ...p.toObject(), hora: a.hora, dia_noche: a.dia_noche });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: e.message });
+    }
+  }
+);
+
+// ─────────── Marketplace ───────────
+// 8) Rutas de Marketplace (Listings)
+// GET /listings      → obtiene todas las listings (sin excluir a nadie)
+app.get('/listingsx/:id', apiLimiter, authenticateJWT, async (req, res) => {
+  try {
+    const listings = await Listing.find().sort({ price: 1, createdAt: -1 }); 
+    // Ordenamos por price asc, y si hay empate, por fecha descendente
+    return res.json(listings);
+  } catch (err) {
+    console.error('Error en GET /listings:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
+// GET /listings/:id → obtener detalles de un listing propio (name, qty, etc.)
+app.get('/listings/:id',
+  apiLimiter,
+  authenticateJWT,
+  param('id').isMongoId(),
+  async (req, res) => {
+    // Validación de param
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+    const listingId = req.params.id;
+
+    try {
+      const listing = await Listing.findById(listingId).lean();
+      if (!listing) {
+        return res.status(404).json({ error: 'Listing no encontrado' });
+      }
+      // Verificar propietario
+      if (listing.owner !== req.user.playerName) {
+        // Puedes devolver 403 o 404 según consideres (aquí 403)
+        return res.status(403).json({ error: 'No tienes permiso para ver este listing' });
+      }
+      // Retornar solo los campos necesarios
+      return res.json({
+        id: listing._id,
+        inventoryId: listing.inventoryId,
+        name: listing.name,
+        type: listing.type,
+        quantity: listing.qty,
+        price: listing.price,
+        imageUrl: listing.imageUrl,
+        createdAt: listing.createdAt
+      });
+    } catch (e) {
+      console.error('Error en GET /listings/:id:', e);
+      // Si ocurre CastError u otro, captúralo
+      return res.status(500).json({ error: 'Error interno al obtener listing' });
+    }
+  }
+);
+
+// POST /listings     → publicar nuevo ítem
 app.post(
-  '/save/:playerName',
+  '/listingsx/:id',
   apiLimiter,
   authenticateJWT,
   [
-    param('playerName').isString().notEmpty(),
-    body('posicionplayerx').optional().isNumeric(),
-    body('posicionplayery').optional().isNumeric(),
-    body('vidaPorcentaje').optional().isNumeric(),
-    body('aguaPorcentaje').optional().isNumeric(),
-    body('comidaPorcentaje').optional().isNumeric(),
-    body('speed').optional().isNumeric(),
-    body('mundo').optional().isInt(),
-    body('moneda').optional().isInt(),
-    body('Username').optional().isString(),
-    body('nivel').optional().isNumeric(),
-    body('nivel_exp').optional().isNumeric(),
-    body('sabiduria').optional().isNumeric(),
-    body('sabiduria_exp').optional().isNumeric(),
-    body('fuerza').optional().isNumeric(),
-    body('fuerza_exp').optional().isNumeric(),
-    body('agricultura').optional().isNumeric(),
-    body('agricultura_exp').optional().isNumeric(),
-    body('misiones').optional().isInt(),
-    body('inventory').optional().isArray(),
-    body('chest').optional().isArray()
+    body('inventoryId').isString().notEmpty(),
+    body('name').isString().notEmpty(),
+    body('type').isString().notEmpty(),
+    body('qty').isInt({ min: 1 }),
+    body('price').isFloat({ min: 0 }),
+    body('imageUrl').optional().isString()
   ],
   async (req, res) => {
-    // Validación de express-validator
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
 
-    const { playerName } = req.params;
-    const bodyData = req.body;
-
-    // Sólo permitimos que el token coincida con el playerName
-    if (req.user.playerName !== playerName) {
-      return res.status(403).json({ error: 'No autorizado para ese jugador' });
-    }
-
-    // Construcción de updateData sin sobrescribir con undefined/null
-    const updateData = {};
-    Object.keys(bodyData).forEach(k => {
-      if (bodyData[k] !== undefined && bodyData[k] !== null) {
-        updateData[k] = bodyData[k];
-      }
-    });
+    const owner = req.user.playerName;
+    const { inventoryId, name, type, qty, price, imageUrl } = req.body;
 
     try {
-      let player = await Player.findOne({ playerName });
-      if (player) {
-        Object.assign(player, updateData);
-        await player.save();
-      } else {
-        player = new Player({ playerName, ...updateData });
-        await player.save();
-      }
-      return res.json({ success: true });
+      const newListing = new Listing({
+        owner,
+        inventoryId,
+        name,
+        type,
+        qty,
+        price,
+        imageUrl: imageUrl || ''
+      });
+      await newListing.save();
+      return res.status(201).json(newListing);
     } catch (err) {
-      console.error('Error en /save:', err);
+      console.error('Error en POST /listings:', err);
       return res.status(500).json({ error: err.message });
     }
   }
 );
 
-app.get(
-  '/load/:playerName',
+
+
+app.post(
+  '/listings/:id/buy',
   apiLimiter,
   authenticateJWT,
-  param('playerName').isString().notEmpty(),
+  param('id').isMongoId(),            // 1) Validar que sea un ObjectId
   async (req, res) => {
+    // 2) Revisa errores de validación del param
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
-
-    const { playerName } = req.params;
-    if (req.user.playerName !== playerName) {
-      return res.status(403).json({ error: 'No autorizado para ese jugador' });
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
     }
 
+    const listingId = req.params.id;
     try {
-      let playerDoc = await Player.findOne({ playerName });
-      if (!playerDoc) {
-        playerDoc = new Player({ playerName });
-        await playerDoc.save();
+      // 3) Obtener listing
+      const listing = await Listing.findById(listingId);
+      if (!listing) {
+        return res.status(404).json({ error: 'Listing no encontrado' });
       }
 
-      let admin = await Admin.findById('config');
-      if (!admin) {
-        admin = new Admin({ _id: 'config' });
-        await admin.save();
+      // 4) Prohibir auto-compra
+      if (listing.owner === req.user.playerName) {
+        return res.status(400).json({ error: 'No puedes comprar tu propio listing' });
       }
 
-      return res.json({ ...playerDoc.toObject(), hora: admin.hora, dia_noche: admin.dia_noche });
-    } catch (err) {
-      console.error('Error en /load:', err);
-      return res.status(500).json({ error: err.message });
+      // 5) Obtener buyer y seller
+      const [buyer, seller] = await Promise.all([
+        Player.findOne({ playerName: req.user.playerName }),
+        Player.findOne({ playerName: listing.owner })
+      ]);
+      if (!buyer) {
+        return res.status(404).json({ error: 'Comprador no existe' });
+      }
+      if (!seller) {
+        return res.status(404).json({ error: 'Vendedor no existe' });
+      }
+
+      // 6) Cálculo
+      const total = listing.price * listing.qty;
+      const rate  = commissionRates[listing.type] ?? commissionRates.default;
+      const comm  = total * rate;
+
+      // 7) Fondos insuficientes
+      if (buyer.moneda < total) {
+        return res.status(400).json({ error: 'Fondos insuficientes' });
+      }
+
+      // 8) Ajustar balances
+      buyer.moneda  -= total;
+      seller.moneda += (total - comm);
+
+      // 9) Guardar cambios y borrar listing
+      await buyer.save();
+      await seller.save();
+      await Listing.findByIdAndDelete(listingId);
+
+      // 10) Responder éxito
+      return res.json({
+        success:       true,
+        totalCost:     total,
+        commission:    comm,
+        netToSeller:   total - comm,
+        commissionRate: rate
+      });
+    } catch (e) {
+      console.error('Error en POST /listings/:id/buy →', e);
+      return res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  }
+);
+
+app.delete(
+  '/listings/:id',
+  apiLimiter,
+  authenticateJWT,
+  // 1) Validamos que :id sea un ObjectId
+  param('id').isMongoId(),
+  async (req, res) => {
+    // 2) Chequeo de errores de validación
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const listingId = req.params.id;
+    try {
+      // 3) Recuperamos el listing
+      const l = await Listing.findById(listingId);
+      if (!l) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+
+      // 4) Revisamos que el propietario coincida
+      if (l.owner !== req.user.playerName) {
+        return res.status(403).json({ error: 'No autorizado' });
+      }
+
+      // 5) Borramos usando findByIdAndDelete
+      await Listing.findByIdAndDelete(listingId);
+
+      return res.json({ success: true });
+    } catch (e) {
+      console.error('DELETE /listings/:id error:', e);
+      return res.status(500).json({ error: 'Error interno del servidor' });
     }
   }
 );
 
 
-// 8) 404 y arranque
+// 404 handler
 app.use((req, res) => res.status(404).json({ error: `Ruta no encontrada: ${req.method} ${req.originalUrl}` }));
 
-console.log('RUTAS DISPONIBLES:');
-app._router.stack
-  .filter(r => r.route && r.route.path)
-  .forEach(r => {
-    console.log(`  ${Object.keys(r.route.methods)[0].toUpperCase()} ${r.route.path}`);
-  });
-
-app.listen(port, '0.0.0.0', () => console.log(`Servidor escuchando en http://0.0.0.0:${port}`));
+// Start server
+app.listen(port, '0.0.0.0', () => console.log(`✅ Backend activo en http://0.0.0.0:${port}`));
